@@ -10,7 +10,11 @@ aiRouter.post('/generate-images', auth, generateImage)
 
 aiRouter.post('/remove-background', upload.single('image'), auth, removeImageBackground) 
 
-aiRouter.post('/remove-object', upload.single('image'), auth, removeImageObject) 
+//aiRouter.post('/remove-object', upload.single('image'), auth, removeImageObject) 
+aiRouter.post('/remove-object', upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'mask', maxCount: 1 }
+]), auth, removeImageObject) 
 
 aiRouter.post('/review-resume', upload.single('resume'), auth, resumeReview) 
 

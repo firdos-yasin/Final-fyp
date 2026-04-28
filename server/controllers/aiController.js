@@ -11,8 +11,8 @@ import { createRequire } from "module";
 import { GoogleGenAI } from "@google/genai";
 import Replicate from "replicate";
 
-const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+//const pdfParseModule = require("pdf-parse");
+//const pdfParse = pdfParseModule.default || pdfParseModule;
 //ARTCILE GENRATE
 const openai = new OpenAI({
     apiKey: process.env.GEMINI_API_KEY,
@@ -119,82 +119,132 @@ export const generateBlogTitle = async (req, res)=>{
 //generate image
 
 
-export const generateImage = async (req, res) => {
-    try {
-        const { userId } = req.auth();
-        const { prompt, publish } = req.body;
-        const plan = req.plan;
-        const free_usage = req.free_usage;
 
-        console.log("USER:", userId);
-        console.log("PLAN:", plan);
+/*const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN,
+});
+*/
 
-        if (!prompt) {
-            return res.json({ success: false, message: "Prompt is required" });
-        }
+/*export const generateImage = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const { prompt, publish } = req.body;  // 👈 sirf publish add kiya
 
-        if (plan !== "premium" && free_usage >= 15) {
-            return res.json({
-                success: false,
-                message: "Limit reached. Upgrade to continue."
-            });
-        }
-
-        // 🔥 CLEAN PROMPT (IMPORTANT)
-      const cleanPrompt = prompt
-    .replace("Generate an image of", "")
-    .trim();
-
-const imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&seed=${Date.now()}`;
-
-        console.log("IMAGE:", imageUrl);
-
-        // DB SAVE
-        await sql`
-            INSERT INTO creations (user_id, prompt, content, type)
-            VALUES (${userId}, ${prompt}, ${imageUrl}, 'image')
-        `;
-
-        // usage update
-        if (plan !== "premium") {
-            await clerkClient.users.updateUserMetadata(userId, {
-                privateMetadata: {
-                    free_usage: free_usage + 1
-                }
-            });
-        }
-
-        res.json({
-            success: true,
-            image: imageUrl
-        });
-
-    } catch (error) {
-        console.log("ERROR:", error.message);
-        res.json({
-            success: false,
-            message: error.message
-        });
+    if (!prompt) {
+      return res.json({ success: false, message: "Prompt required" });
     }
+
+    const model = "black-forest-labs/flux-2-pro";
+
+    const output = await replicate.run(model, {
+      input: {
+        prompt: prompt
+      }
+    });
+
+    console.log("RAW OUTPUT:", output);
+
+    let imageUrl;
+
+    if (Array.isArray(output)) {
+      imageUrl = output[0];
+    } else if (typeof output === "string") {
+      imageUrl = output;
+    } else if (output?.getReader) {
+      const reader = output.getReader();
+      let chunks = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+
+      const buffer = Buffer.concat(chunks);
+      imageUrl = `data:image/png;base64,${buffer.toString("base64")}`;
+    }
+
+    // 👇 sirf yeh block add kiya
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type, publish)
+      VALUES (${userId}, ${prompt}, ${imageUrl}, 'image', ${publish ?? false})
+    `;
+
+    return res.json({
+      success: true,
+      image: imageUrl
+    });
+
+  } catch (error) {
+    console.log("ERROR:", error);
+    return res.json({
+      success: false,
+      message: error.message
+    });
+  }
 };
+*/
+export const generateImage = async (req, res) => {
+  try {
+    const { userId } = req.auth();
+    const { prompt, publish } = req.body;
 
+    if (!prompt) {
+      return res.json({ success: false, message: "Prompt required" });
+    }
 
+    // Clipdrop API call
+    const form = new FormData();
+    form.append('prompt', prompt);
 
+    const response = await axios.post(
+      'https://clipdrop-api.co/text-to-image/v1',
+      form,
+      {
+        headers: {
+          'x-api-key': process.env.CLIPDROP_API_KEY,
+          ...form.getHeaders(),
+        },
+        responseType: 'arraybuffer',
+      }
+    );
 
+    const base64Image = Buffer.from(response.data).toString('base64');
+    const imageUrl = `data:image/png;base64,${base64Image}`;
 
+    await sql`
+      INSERT INTO creations (user_id, prompt, content, type, publish)
+      VALUES (${userId}, ${prompt}, ${imageUrl}, 'image', ${publish ?? false})
+    `;
 
+    return res.json({
+      success: true,
+      image: imageUrl
+    });
 
-
-
-
-
+  } catch (error) {
+    console.log("ERROR:", error.response?.data || error.message);
+    return res.json({
+      success: false,
+      message: error.message
+    });
+  }
+};
 
 //remove background
 export const removeImageBackground = async (req, res) => {
     try {
         const { userId } = req.auth();
-        const {image} = req.file;
+        const image = req.file;
         const plan = req.plan;
+
+        if (!userId) {
+            return res.json({ success: false, message: "Unauthorized" });
+        }
+
+        if (!image) {
+            return res.json({ success: false, message: "No image uploaded." });
+        }
 
         if (plan !== 'premium') {
             return res.json({
@@ -203,21 +253,33 @@ export const removeImageBackground = async (req, res) => {
             });
         }
 
-
-        const { secure_url } = await cloudinary.uploader.upload(image.path, {
-            transformation: [
-                {
-                    effect: 'background_removal',
-                    background_removal: 'remove_the_background'
-                }
-            ]
+        const formData = new FormData();
+        formData.append('size', 'auto');
+        formData.append('image_file', fs.createReadStream(image.path), {
+            filename: image.originalname,
+            contentType: image.mimetype,
         });
+
+        const response = await axios.post(
+            'https://api.remove.bg/v1.0/removebg',
+            formData,
+            {
+                headers: {
+                    'X-Api-Key': process.env.REMOVEBG_API_KEY,
+                    ...formData.getHeaders(),
+                },
+                responseType: 'arraybuffer',
+            }
+        );
+
+        const base64Image = Buffer.from(response.data).toString('base64');
+        const imageUrl = `data:image/png;base64,${base64Image}`;
 
         await sql`
             INSERT INTO creations (user_id, prompt, content, type)
-            VALUES (${userId}, 'Remove background from image', ${secure_url}, 'image')`;
+            VALUES (${userId}, 'Remove background from image', ${imageUrl}, 'image')`;
 
-        res.json({ success: true, content: secure_url });
+        res.json({ success: true, content: imageUrl });
 
     } catch (error) {
         console.log(error.response?.data || error.message);
@@ -231,11 +293,11 @@ export const removeImageBackground = async (req, res) => {
 
 
 //remove image object
-export const removeImageObject = async (req, res) => {
+/*export const removeImageObject = async (req, res) => {
     try {
         const { userId } = req.auth();
         const { object } = req.body;
-        const {image} = req.file;
+        const image = req.file;
         const plan = req.plan;
 
         if (plan !== 'premium') {
@@ -267,39 +329,85 @@ export const removeImageObject = async (req, res) => {
         });
     }
 };
+*/
 
+export const removeImageObject = async (req, res) => {
+    try {
+        const { userId } = req.auth();
+        const image = req.files['image'][0];
+        const mask = req.files['mask'][0];
+        const plan = req.plan;
 
+        if (!image || !mask) {
+            return res.json({ success: false, message: "Image and mask required." });
+        }
+
+        if (plan !== 'premium') {
+            return res.json({ success: false, message: "Premium only feature." });
+        }
+
+        const formData = new FormData();
+        formData.append('image_file', fs.createReadStream(image.path), {
+            filename: image.originalname,
+            contentType: image.mimetype,
+        });
+        formData.append('mask_file', fs.createReadStream(mask.path), {
+            filename: 'mask.png',
+            contentType: 'image/png',
+        });
+
+        const response = await axios.post(
+            'https://clipdrop-api.co/cleanup/v1',
+            formData,
+            {
+                headers: {
+                    'x-api-key': process.env.CLIPDROP_API_KEY,
+                    ...formData.getHeaders(),
+                },
+                responseType: 'arraybuffer',
+            }
+        );
+
+        const base64Image = Buffer.from(response.data).toString('base64');
+        const imageUrl = `data:image/png;base64,${base64Image}`;
+
+        await sql`
+            INSERT INTO creations (user_id, prompt, content, type)
+            VALUES (${userId}, 'Removed object from image', ${imageUrl}, 'image')`;
+
+        res.json({ success: true, content: imageUrl });
+
+    } catch (error) {
+        console.log(error.response?.data || error.message);
+        res.json({ success: false, message: error.response?.data?.message || error.message });
+    }
+};
 
 //resume
+
 export const resumeReview = async (req, res) => {
     try {
+        const { default: pdfParse } = await import("pdf-parse-fork");
+
         const { userId } = req.auth();
         const resume = req.file;
         const plan = req.plan;
 
         if (plan !== 'premium') {
-            return res.json({
-                success: false,
-                message: "This feature is only available for premium subscriptions."
-            });
+            return res.json({ success: false, message: "This feature is only available for premium subscriptions." });
         }
 
         if (!resume) {
-            return res.json({
-                success: false,
-                message: "No resume file uploaded."
-            });
+            return res.json({ success: false, message: "No resume file uploaded." });
         }
 
         if (resume.size > 5 * 1024 * 1024) {
-            return res.json({
-                success: false,
-                message: "Resume file size exceeds allowed size (5MB)."
-            });
+            return res.json({ success: false, message: "Resume file size exceeds allowed size (5MB)." });
         }
 
         const dataBuffer = fs.readFileSync(resume.path);
         const pdfData = await pdfParse(dataBuffer);
+
 
         const prompt = `Review the following resume and provide constructive feedback on 
 its strengths, weaknesses, and areas of improvement.
@@ -308,17 +416,14 @@ Resume Content:
 
 ${pdfData.text}`;
 
-        const response = await AI.chat.completions.create({
+        const response = await openai.chat.completions.create({
             model: "gemini-3-flash-preview",
-            messages: [
-                {
-                    role: "user",
-                    content: prompt,
-                }
-            ],
+            messages: [{ role: "user", content: prompt }],
             temperature: 0.7,
-            max_tokens: 1000,
+            max_tokens: 3000,
         });
+
+        console.log("AI RESPONSE:", response.choices[0].message.content);
 
         const content = response.choices[0].message.content;
 
@@ -330,10 +435,6 @@ ${pdfData.text}`;
         res.json({ success: true, content });
 
     } catch (error) {
-        console.log(error.response?.data || error.message);
-        res.json({
-            success: false,
-            message: error.response?.data?.message || error.message
-        });
+        res.json({ success: false, message: error.message });
     }
 };

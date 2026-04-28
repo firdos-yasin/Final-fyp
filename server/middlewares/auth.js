@@ -15,8 +15,6 @@ export const auth = async (req, res, next) => {
 
         const hasPremiumPlan = await has({ plan: 'premium' });
 
-        console.log("USER ID:", userId);
-        console.log("HAS PREMIUM PLAN:", hasPremiumPlan);
 
         const user = await clerkClient.users.getUser(userId);
 
@@ -33,8 +31,6 @@ export const auth = async (req, res, next) => {
         }
 
         req.plan = hasPremiumPlan ? 'premium' : 'free';
-
-        console.log("REQ PLAN:", req.plan);
 
         next();
     } catch (error) {
